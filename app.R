@@ -102,9 +102,11 @@ exercicio_de <- function(d) as.integer(format(as.Date(d), "%Y"))
 
 # Hash de senha (SHA-256) — nunca guardamos a senha em texto puro
 hash_senha <- function(s) {
-  s <- as.character(s %||% "")
+  # Normaliza para evitar divergência entre ambientes (Windows x Linux) e
+  # espaços acidentais: força UTF-8, apara espaços das pontas e usa hex minúsculo.
+  s <- trimws(enc2utf8(as.character(s %||% "")))
   if (!nzchar(s)) return("")
-  as.character(openssl::sha256(charToRaw(s)))
+  tolower(as.character(openssl::sha256(charToRaw(s))))
 }
 
 # --- Validação de CPF / CNPJ ------------------------------------------------
@@ -1362,17 +1364,19 @@ server <- function(input, output, session) {
 
     # PRODUÇÃO: e-mail + senha
     senha <- input$login_senha %||% ""
-    if (!nzchar(senha)) { showNotification("Informe a senha.", type = "warning"); return() }
+    if (!nzchar(trimws(senha))) { showNotification("Informe a senha.", type = "warning"); return() }
     garantir_usuario(email, papel)
     df <- v_users()
     hash_atual <- df$senha_hash[tolower(df$email) == email][1]
-    if (is.na(hash_atual) || !nzchar(hash_atual)) {
+    hash_atual <- if (length(hash_atual) == 0 || is.na(hash_atual)) ""
+                  else trimws(tolower(as.character(hash_atual)))
+    if (!nzchar(hash_atual)) {
       # Primeiro acesso: define a senha digitada
       df$senha_hash[tolower(df$email) == email] <- hash_senha(senha)
       v_users(df); persistir("usuarios", df)
       user_email(email); user_papel(papel); auth(TRUE)
       showNotification("Senha definida e acesso liberado.", type = "message")
-    } else if (identical(hash_atual, hash_senha(senha))) {
+    } else if (isTRUE(hash_atual == hash_senha(senha))) {
       user_email(email); user_papel(papel); auth(TRUE)
       showNotification(paste("Bem-vindo! Papel:", papel), type = "message")
     } else {
