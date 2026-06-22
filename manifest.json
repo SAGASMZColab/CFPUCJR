@@ -4162,10 +4162,16 @@
   },
   "files": {
     ".Renviron": {
-      "checksum": "ea4d6cf879ee2924704640b8ccb1e528"
+      "checksum": "28a1dd102818649cdde36b04ae6729b9"
+    },
+    ".secrets/c13dc354db9600c8cd9b2bd868d1bf25_staszago@gmail.com": {
+      "checksum": "ecde21aa41580f46730f27f5252dd3e4"
     },
     "app.R": {
-      "checksum": "d77161ac4444f41bb1c0d90a46ebe81b"
+      "checksum": "8763af42f4f096acd550a05a56cfdd10"
+    },
+    "gerar_token_drive.R": {
+      "checksum": "6f3e615322bab0d401fae1df722d71c2"
     },
     "install.R": {
       "checksum": "abbd217f6176fc9b90227a9c7c4ab291"
@@ -4175,6 +4181,12 @@
     },
     "service-account.json": {
       "checksum": "dd62c9b480204f24e15ac36fcef3215d"
+    },
+    "token.rds": {
+      "checksum": "ff6dfcdce8282cb14cb4b4d24fc8f9b4"
+    },
+    "token_b64.txt": {
+      "checksum": "622ef635f0220c13f31785a6f609f320"
     }
   },
   "users": null

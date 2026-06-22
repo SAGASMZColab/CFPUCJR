@@ -51,7 +51,13 @@ CFG <- list(
   # Alternativa: conteúdo da chave JSON colado numa variável de ambiente
   # (útil em plataformas que só aceitam segredos como variável, ex.: Posit
   # Connect Cloud). Se preenchida, tem prioridade sobre SA_JSON.
-  SA_JSON_CONTENT = Sys.getenv("PUCJR_SA_JSON_CONTENT", "")
+  SA_JSON_CONTENT = Sys.getenv("PUCJR_SA_JSON_CONTENT", ""),
+
+  # --- C+: TOKEN OAuth de uma conta COM cota no Drive (pessoal/dedicada) ----
+  # Token gerado uma vez localmente (login no navegador) e codificado em
+  # base64. É a única forma de o app CRIAR arquivos no Drive usando Gmail
+  # comum (a conta de serviço não tem cota). Tem PRIORIDADE sobre a chave.
+  GOOGLE_TOKEN_B64 = Sys.getenv("PUCJR_GOOGLE_TOKEN_B64", "")
 )
 
 # Nomes das abas (worksheets) usadas no Google Sheets
@@ -599,35 +605,47 @@ seed_usuarios <- tibble(
 #  CAMADA DE BACKEND (Google Sheets / Drive)  -- abstração com fallback
 # =============================================================================
 
-# Autentica o service account (apenas em produção)
+# Autentica o backend (apenas em produção)
 backend_conectar <- function() {
   if (CFG$MODO_DEMO) return(invisible(FALSE))
   scopes <- c("https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive")
   ok <- tryCatch({
-    # Se o conteúdo da chave veio por variável de ambiente, grava num arquivo
-    # temporário e usa esse caminho (caso típico do Posit Connect Cloud).
-    sa_path <- CFG$SA_JSON
-    if (nzchar(CFG$SA_JSON_CONTENT)) {
-      sa_path <- file.path(tempdir(), "pucjr-sa.json")
-      writeLines(CFG$SA_JSON_CONTENT, sa_path)
-    }
-    if (nzchar(sa_path) && file.exists(sa_path)) {
-      # Opção C: autenticação por chave JSON da conta de serviço
-      gs4_auth(path = sa_path)
-      drive_auth(path = sa_path)
+    if (nzchar(CFG$GOOGLE_TOKEN_B64)) {
+      # C+: token OAuth de uma conta COM cota (lido de variável secreta).
+      # Permite CRIAR arquivos no Drive (upload de comprovantes) com Gmail comum.
+      raw <- openssl::base64_decode(CFG$GOOGLE_TOKEN_B64)
+      tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
+      writeBin(raw, tf)
+      tok <- readRDS(tf)
+      drive_auth(token = tok)
+      gs4_auth(token = drive_token())
+      message("Autenticado via token OAuth (conta com cota no Drive).")
     } else {
-      # Opção A/B: sem chave (Application Default Credentials -> metadados do
-      # Google Cloud -> Federação de Identidade). token_fetch tenta cada um.
-      token <- gargle::token_fetch(scopes = scopes)
-      if (is.null(token))
-        stop("Nenhuma credencial keyless encontrada (configure a conta de serviço anexada ou GOOGLE_APPLICATION_CREDENTIALS).")
-      gs4_auth(token = token)
-      drive_auth(token = token)
+      # Se o conteúdo da chave veio por variável de ambiente, grava num arquivo
+      # temporário e usa esse caminho (caso típico do Posit Connect Cloud).
+      sa_path <- CFG$SA_JSON
+      if (nzchar(CFG$SA_JSON_CONTENT)) {
+        sa_path <- file.path(tempdir(), "pucjr-sa.json")
+        writeLines(CFG$SA_JSON_CONTENT, sa_path)
+      }
+      if (nzchar(sa_path) && file.exists(sa_path)) {
+        # Conta de serviço por chave JSON (grava em Sheets; NÃO cria arquivos
+        # no Drive com Gmail comum por falta de cota).
+        gs4_auth(path = sa_path)
+        drive_auth(path = sa_path)
+      } else {
+        # Sem chave: Application Default Credentials / metadados / Federação.
+        token <- gargle::token_fetch(scopes = scopes)
+        if (is.null(token))
+          stop("Nenhuma credencial encontrada (configure o token OAuth, a conta de serviço anexada ou GOOGLE_APPLICATION_CREDENTIALS).")
+        gs4_auth(token = token)
+        drive_auth(token = token)
+      }
     }
     TRUE
   }, error = function(e) {
-    message("Falha ao autenticar a conta de serviço: ", e$message); FALSE
+    message("Falha ao autenticar o backend: ", e$message); FALSE
   })
   invisible(ok)
 }

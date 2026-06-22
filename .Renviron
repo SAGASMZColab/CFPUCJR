@@ -1,0 +1,24 @@
+# =============================================================================
+#  Variáveis de ambiente - Sistema Contábil PUC Jr
+#  Copie para ".Renviron" (NÃO faça commit do arquivo real) ou configure
+#  estas variáveis no painel do seu provedor de hospedagem.
+# =============================================================================
+
+# Modo de execução:
+#   TRUE  = desenvolvimento (sem Google, login simulado)
+#   FALSE = produção (login Google + backend Sheets/Drive)
+PUCJR_MODO_DEMO=FALSE
+
+# Google Sheets - ID da planilha-base (entre /d/ e /edit na URL)
+PUCJR_SHEET_ID= 1mMTK8k1wxd3KGfQ-_wBA0zSmySj1OMpDwKNzldE3WUk
+
+# Google Drive - ID da pasta de comprovantes
+PUCJR_DRIVE_FOLDER_ID= 1MZkrFglSKA8RXUUYKzDbBG1tyLtDe-Df
+
+# Caminho da chave JSON do service account.
+# Deixe VAZIO para usar autenticação SEM CHAVE (keyless): Application Default
+# Credentials -> metadados do Google Cloud (Cloud Run/GCE) -> Federação de
+# Identidade. Veja a seção 3.7 do guia.
+PUCJR_SA_JSON=service-account.json
+
+ 
