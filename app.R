@@ -629,38 +629,13 @@ backend_conectar <- function() {
     if (nzchar(tok_b64)) {
       # C+: token OAuth de uma conta COM cota (lido de variável secreta).
       # Permite CRIAR arquivos no Drive (upload de comprovantes) com Gmail comum.
-      #
-      # Padrao oficial do gargle p/ deploy: reconstroi o ARQUIVO DE CACHE do token
-      # num diretorio gravavel e autentica PELO CACHE (email), em vez de passar o
-      # objeto do token (que carrega o caminho ".secrets" inexistente no servidor).
       raw <- openssl::base64_decode(tok_b64)
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
       tok <- readRDS(tf)
-
-      cache_dir <- file.path(tempdir(), "gargle_secrets")
-      dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
-      fname <- tryCatch({
-        bp <- basename(as.character(tok$cache_path))
-        if (length(bp) == 1 && nzchar(bp) && grepl("_", bp)) bp else NA_character_
-      }, error = function(e) NA_character_)
-      email <- Sys.getenv("PUCJR_GOOGLE_EMAIL", "")
-      if (!nzchar(email) && !is.na(fname)) email <- sub("^[^_]+_", "", fname)
-      if (is.na(fname)) fname <- paste0("token_", if (nzchar(email)) email else "conta")
-      file.copy(tf, file.path(cache_dir, fname), overwrite = TRUE)
-
-      message("Backend OAuth [cache v3]: cache=", cache_dir,
-              " arquivo=", fname, " email=", email)
-
-      options(gargle_oauth_cache = cache_dir,
-              gargle_oauth_email = if (nzchar(email)) email else TRUE)
-      if (nzchar(email)) {
-        drive_auth(email = email, cache = cache_dir, use_oob = FALSE)
-      } else {
-        drive_auth(cache = cache_dir, use_oob = FALSE)
-      }
+      drive_auth(token = tok)
       gs4_auth(token = drive_token())
-      message("Autenticado via token OAuth [cache v3] (conta com cota no Drive). Partes: ",
+      message("Autenticado via token OAuth (conta com cota no Drive). Partes: ",
               if (nzchar(CFG$GOOGLE_TOKEN_B64)) "1 (variável única)" else (i - 1L))
     } else {
       # Se o conteúdo da chave veio por variável de ambiente, grava num arquivo
