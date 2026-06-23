@@ -1,5 +1,13 @@
+# NUNCA versionar segredos
 service-account.json
+*.json.key
 .Renviron
+.secrets/
+token.rds
+token_b64.txt
+# Artefatos locais
+.Rproj.user/
 .Rhistory
 .RData
 rsconnect/
+.secrets
