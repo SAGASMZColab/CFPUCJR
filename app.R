@@ -633,8 +633,8 @@ backend_conectar <- function() {
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
       tok <- readRDS(tf)
-      drive_auth(token = tok)
-      gs4_auth(token = drive_token())
+      drive_auth(token = tok, cache = FALSE)
+      gs4_auth(token = drive_token(), cache = FALSE)
       message("Autenticado via token OAuth (conta com cota no Drive). Partes: ",
               if (nzchar(CFG$GOOGLE_TOKEN_B64)) "1 (variável única)" else (i - 1L))
     } else {
