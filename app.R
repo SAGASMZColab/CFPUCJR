@@ -629,6 +629,11 @@ backend_conectar <- function() {
     if (nzchar(tok_b64)) {
       # C+: token OAuth de uma conta COM cota (lido de variável secreta).
       # Permite CRIAR arquivos no Drive (upload de comprovantes) com Gmail comum.
+      # Cria o diretório vazio no servidor para o pacote conseguir gravar as renovações temporárias
+      if (!dir.exists(".secrets")) {
+        dir.create(".secrets")
+      }
+      
       raw <- openssl::base64_decode(tok_b64)
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
