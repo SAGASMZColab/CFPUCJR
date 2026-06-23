@@ -709,7 +709,11 @@ backend_upload_doc <- function(caminho, nome) {
   }
   tryCatch({
     dest <- if (nzchar(CFG$DRIVE_FOLDER_ID)) as_id(CFG$DRIVE_FOLDER_ID) else NULL
-    arq <- drive_upload(media = caminho, path = dest, name = nome, overwrite = FALSE)
+    # Nome único no Drive (evita colisão "já existe": data/hora + sufixo aleatório)
+    nome_unico <- paste0(format(Sys.time(), "%Y%m%d-%H%M%S"), "-",
+                         formatC(sample.int(9999, 1), width = 4, flag = "0"),
+                         "_", nome)
+    arq <- drive_upload(media = caminho, path = dest, name = nome_unico, overwrite = FALSE)
     drive_share(arq, role = "reader", type = "anyone")
     arq$drive_resource[[1]]$webViewLink %||% drive_link(arq)
   }, error = function(e) {
@@ -1941,15 +1945,18 @@ server <- function(input, output, session) {
     c <- input$razao_conta
     deb <- d %>% filter(Conta_Debito == c) %>%
       transmute(ID, Data, Tipo = "Débito",
-                Contrapartida = ifelse(is.na(Conta_Credito) | Conta_Credito == "",
-                                       "(composto)", Conta_Credito),
-                Valor, Historico)
+                Contrapartida = as.character(Conta_Credito), Valor, Historico)
     cre <- d %>% filter(Conta_Credito == c) %>%
       transmute(ID, Data, Tipo = "Crédito",
-                Contrapartida = ifelse(is.na(Conta_Debito) | Conta_Debito == "",
-                                       "(composto)", Conta_Debito),
-                Valor, Historico)
-    r <- bind_rows(deb, cre) %>% arrange(Data, ID) %>%
+                Contrapartida = as.character(Conta_Debito), Valor, Historico)
+    r <- bind_rows(deb, cre)
+    if (nrow(r) == 0)
+      return(datatable(tibble(Mensagem = "Sem movimento nesta conta"),
+                       options = list(dom = "t"), rownames = FALSE))
+    r <- r %>%
+      mutate(Contrapartida = ifelse(is.na(Contrapartida) | Contrapartida == "",
+                                    "(composto)", Contrapartida)) %>%
+      arrange(Data, ID) %>%
       mutate(Sinal = if_else(
                (str_starts(c, "1") | str_starts(c, "3")) == (Tipo == "Débito"),
                Valor, -Valor),
