@@ -633,6 +633,11 @@ backend_conectar <- function() {
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
       tok <- readRDS(tf)
+      # O token foi gerado localmente com cache em ".secrets", caminho que NÃO
+      # existe no servidor. Desligamos o cache em disco para o gargle renovar o
+      # token apenas em memória (senão falha ao tentar ler/gravar ".secrets/...").
+      options(gargle_oauth_cache = FALSE)
+      try(tok$cache_path <- FALSE, silent = TRUE)
       drive_auth(token = tok)
       gs4_auth(token = drive_token())
       message("Autenticado via token OAuth (conta com cota no Drive). Partes: ",
