@@ -566,7 +566,7 @@ db_plano_contas <- db_plano_contas %>%
 #  ESQUEMAS (estruturas vazias) DAS TABELAS DE DADOS
 # =============================================================================
 schema_diario <- tibble(
-  ID = numeric(), Data = as.Date(character()),
+  ID = numeric(), Lancamento_ID = numeric(), Data = as.Date(character()),
   Conta_Debito = character(), Conta_Credito = character(),
   Valor = numeric(), Historico = character(), Doc_Link = character(),
   Tipo_Lancamento = character(), Ref_ID = numeric(),
@@ -611,16 +611,32 @@ backend_conectar <- function() {
   scopes <- c("https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive")
   ok <- tryCatch({
-    if (nzchar(CFG$GOOGLE_TOKEN_B64)) {
+    # Monta o token base64: usa PUCJR_GOOGLE_TOKEN_B64 inteiro; se vazio,
+    # concatena as partes PUCJR_GOOGLE_TOKEN_B64_1, _2, ... (para contornar o
+    # limite de tamanho por variável do Connect Cloud).
+    tok_b64 <- CFG$GOOGLE_TOKEN_B64
+    if (!nzchar(tok_b64)) {
+      partes <- character(0); i <- 1L
+      repeat {
+        v <- Sys.getenv(paste0("PUCJR_GOOGLE_TOKEN_B64_", i), "")
+        if (!nzchar(v)) break
+        partes <- c(partes, v); i <- i + 1L
+      }
+      if (length(partes)) tok_b64 <- paste(partes, collapse = "")
+    }
+    tok_b64 <- gsub("[[:space:]]", "", tok_b64)  # remove quebras/espaços acidentais
+
+    if (nzchar(tok_b64)) {
       # C+: token OAuth de uma conta COM cota (lido de variável secreta).
       # Permite CRIAR arquivos no Drive (upload de comprovantes) com Gmail comum.
-      raw <- openssl::base64_decode(CFG$GOOGLE_TOKEN_B64)
+      raw <- openssl::base64_decode(tok_b64)
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
       tok <- readRDS(tf)
       drive_auth(token = tok)
       gs4_auth(token = drive_token())
-      message("Autenticado via token OAuth (conta com cota no Drive).")
+      message("Autenticado via token OAuth (conta com cota no Drive). Partes: ",
+              if (nzchar(CFG$GOOGLE_TOKEN_B64)) "1 (variável única)" else (i - 1L))
     } else {
       # Se o conteúdo da chave veio por variável de ambiente, grava num arquivo
       # temporário e usa esse caminho (caso típico do Posit Connect Cloud).
@@ -1215,11 +1231,37 @@ server <- function(input, output, session) {
         # --- Diário (todos) ---
         nav_panel("Diário",
           layout_sidebar(
-            sidebar = sidebar(title = "Novo lançamento", width = 360,
+            sidebar = sidebar(title = "Novo lançamento", width = 380,
               dateInput("lan_data", "Data do fato:", value = Sys.Date()),
-              selectizeInput("lan_debito", "Conta Débito:", choices = NULL),
-              selectizeInput("lan_credito", "Conta Crédito:", choices = NULL),
-              numericInput("lan_valor", "Valor (R$):", value = 0, min = 0.01, step = 0.01),
+              radioButtons("lan_tipo", "Tipo de lançamento:",
+                c("Simples (1 débito × 1 crédito)" = "simples",
+                  "Composto (vários débitos/créditos)" = "composto"),
+                selected = "simples"),
+
+              # ---- Lançamento simples ----
+              conditionalPanel("input.lan_tipo == 'simples'",
+                selectizeInput("lan_debito", "Conta Débito:", choices = NULL),
+                selectizeInput("lan_credito", "Conta Crédito:", choices = NULL),
+                numericInput("lan_valor", "Valor (R$):", value = 0, min = 0.01, step = 0.01)
+              ),
+
+              # ---- Lançamento composto ----
+              conditionalPanel("input.lan_tipo == 'composto'",
+                div(class = "form-section", "Contas DEBITADAS"),
+                do.call(tagList, lapply(1:5, function(i) fluidRow(
+                  column(7, selectizeInput(paste0("lan_d_conta_", i), NULL, choices = NULL,
+                                           options = list(placeholder = paste("Débito", i)))),
+                  column(5, numericInput(paste0("lan_d_valor_", i), NULL, value = NA, min = 0, step = 0.01))
+                ))),
+                div(class = "form-section", "Contas CREDITADAS"),
+                do.call(tagList, lapply(1:5, function(i) fluidRow(
+                  column(7, selectizeInput(paste0("lan_c_conta_", i), NULL, choices = NULL,
+                                           options = list(placeholder = paste("Crédito", i)))),
+                  column(5, numericInput(paste0("lan_c_valor_", i), NULL, value = NA, min = 0, step = 0.01))
+                ))),
+                uiOutput("lan_comp_saldo")
+              ),
+
               div(class = "form-section", "Identificação do terceiro (opcional)"),
               textInput("lan_razao", "Razão Social / Nome:",
                         placeholder = "ex.: ACME Serviços Ltda"),
@@ -1376,7 +1418,7 @@ server <- function(input, output, session) {
     # DEMO: entra só com o e-mail
     if (CFG$MODO_DEMO) {
       user_email(email); user_papel(papel); auth(TRUE)
-      showNotification(paste("Bem-vindo! Papel:", papel), type = "message")
+      showNotification(paste("Bem-vindo!", email), type = "message")
       return()
     }
 
@@ -1396,7 +1438,7 @@ server <- function(input, output, session) {
       showNotification("Senha definida e acesso liberado.", type = "message")
     } else if (isTRUE(hash_atual == hash_senha(senha))) {
       user_email(email); user_papel(papel); auth(TRUE)
-      showNotification(paste("Bem-vindo! Papel:", papel), type = "message")
+      showNotification(paste("Bem-vindo!", email), type = "message")
     } else {
       showNotification("Senha incorreta.", type = "error")
     }
@@ -1421,7 +1463,42 @@ server <- function(input, output, session) {
       updateSelectizeInput(session, "lan_debito", choices = escolhas, server = TRUE)
       updateSelectizeInput(session, "lan_credito", choices = escolhas, server = TRUE)
       updateSelectizeInput(session, "razao_conta", choices = escolhas, server = TRUE)
+      # Campos do lançamento composto (5 débitos + 5 créditos)
+      for (i in 1:5) {
+        updateSelectizeInput(session, paste0("lan_d_conta_", i),
+                             choices = escolhas, server = TRUE)
+        updateSelectizeInput(session, paste0("lan_c_conta_", i),
+                             choices = escolhas, server = TRUE)
+      }
     }
+  })
+
+  # Coleta as "pernas" (conta + valor) preenchidas do lançamento composto
+  coletar_pernas <- function(prefixo) {
+    pernas <- lapply(1:5, function(i) {
+      conta <- input[[paste0(prefixo, "_conta_", i)]] %||% ""
+      valor <- suppressWarnings(as.numeric(input[[paste0(prefixo, "_valor_", i)]]))
+      if (nzchar(conta) && !is.na(valor) && valor > 0)
+        tibble(Conta = conta, Valor = valor) else NULL
+    })
+    bind_rows(pernas)
+  }
+
+  # Saldo ao vivo do lançamento composto (confere débitos × créditos)
+  output$lan_comp_saldo <- renderUI({
+    deb <- coletar_pernas("lan_d"); cre <- coletar_pernas("lan_c")
+    td <- if (nrow(deb)) sum(deb$Valor) else 0
+    tc <- if (nrow(cre)) sum(cre$Valor) else 0
+    bal <- abs(td - tc) < 0.005
+    cor <- if (bal && td > 0) "alert-success" else "alert-warning"
+    div(class = paste("alert mt-2", cor),
+        tags$div(paste0("Total débitos: ", formatar_moeda(td))),
+        tags$div(paste0("Total créditos: ", formatar_moeda(tc))),
+        tags$div(class = "fw-bold",
+          if (td == 0 && tc == 0) "Preencha as contas e valores."
+          else if (bal) "Partida equilibrada ✓"
+          else paste0("Diferença: ", formatar_moeda(abs(td - tc)),
+                      " — ajuste para débitos = créditos.")))
   })
   observe({
     req(auth())
@@ -1490,10 +1567,32 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$btn_lanc, {
-    req(input$lan_debito, input$lan_credito, input$lan_valor)
-    if (input$lan_valor <= 0) { showNotification("Valor deve ser > 0.", type = "warning"); return() }
-    if (input$lan_debito == input$lan_credito) {
-      showNotification("Débito e crédito não podem ser a mesma conta.", type = "warning"); return() }
+    tipo <- input$lan_tipo %||% "simples"
+
+    # ---- Reúne as pernas conforme o tipo ----
+    if (tipo == "simples") {
+      req(input$lan_debito, input$lan_credito, input$lan_valor)
+      v <- suppressWarnings(as.numeric(input$lan_valor))
+      if (is.na(v) || v <= 0) { showNotification("Valor deve ser > 0.", type = "warning"); return() }
+      if (input$lan_debito == input$lan_credito) {
+        showNotification("Débito e crédito não podem ser a mesma conta.", type = "warning"); return() }
+      pernas_d <- tibble(Conta = input$lan_debito, Valor = v)
+      pernas_c <- tibble(Conta = input$lan_credito, Valor = v)
+    } else {
+      pernas_d <- coletar_pernas("lan_d")
+      pernas_c <- coletar_pernas("lan_c")
+      if (nrow(pernas_d) == 0 || nrow(pernas_c) == 0) {
+        showNotification("Informe ao menos uma conta debitada e uma creditada (com valor > 0).",
+                         type = "warning"); return() }
+      if (abs(sum(pernas_d$Valor) - sum(pernas_c$Valor)) > 0.005) {
+        showNotification(paste0("Partida desequilibrada: débitos = ",
+          formatar_moeda(sum(pernas_d$Valor)), ", créditos = ",
+          formatar_moeda(sum(pernas_c$Valor)), ". Devem ser iguais."),
+          type = "error"); return() }
+      if (length(intersect(pernas_d$Conta, pernas_c$Conta)) > 0) {
+        showNotification("Uma mesma conta não pode estar debitada e creditada no mesmo lançamento.",
+                         type = "warning"); return() }
+    }
 
     # Validação do CNPJ/CPF (opcional, mas se preenchido deve ser válido)
     doc <- analisar_doc(input$lan_docid)
@@ -1528,72 +1627,128 @@ server <- function(input, output, session) {
                              "comprovante(s) processado(s)."),
                        type = "message", duration = 2)
     }
-    novo_id <- if (nrow(v_diario()) == 0) 1 else max(v_diario()$ID, na.rm = TRUE) + 1
-    novo <- tibble(
-      ID = novo_id, Data = as.Date(input$lan_data),
-      Conta_Debito = input$lan_debito, Conta_Credito = input$lan_credito,
-      Valor = input$lan_valor, Historico = historico_final, Doc_Link = link,
-      Tipo_Lancamento = "Movimento", Ref_ID = NA_real_,
-      Exercicio = exercicio_de(input$lan_data),
-      Usuario = user_email() %||% "n/d", Timestamp = as.character(Sys.time())
-    )
+
+    # ---- Monta as linhas, agrupadas por Lancamento_ID ----
+    base_id <- if (nrow(v_diario()) == 0) 1 else max(v_diario()$ID, na.rm = TRUE) + 1
+    comum <- list(Historico = historico_final, Doc_Link = link,
+                  Tipo_Lancamento = "Movimento", Ref_ID = NA_real_,
+                  Exercicio = exercicio_de(input$lan_data),
+                  Usuario = user_email() %||% "n/d",
+                  Timestamp = as.character(Sys.time()),
+                  Data = as.Date(input$lan_data))
+
+    if (nrow(pernas_d) == 1 && nrow(pernas_c) == 1) {
+      # 1×1: uma única linha com débito e crédito reais (contrapartida no razão)
+      novo <- tibble(
+        ID = base_id, Lancamento_ID = base_id, Data = comum$Data,
+        Conta_Debito = pernas_d$Conta[1], Conta_Credito = pernas_c$Conta[1],
+        Valor = pernas_d$Valor[1], Historico = comum$Historico, Doc_Link = comum$Doc_Link,
+        Tipo_Lancamento = comum$Tipo_Lancamento, Ref_ID = comum$Ref_ID,
+        Exercicio = comum$Exercicio, Usuario = comum$Usuario, Timestamp = comum$Timestamp)
+    } else {
+      # Composto: uma "perna" por conta (débito OU crédito), mesmo Lancamento_ID
+      pernas <- bind_rows(
+        transmute(pernas_d, Debito = Conta, Credito = "", Valor),
+        transmute(pernas_c, Debito = "", Credito = Conta, Valor))
+      novo <- tibble(
+        ID = base_id + seq_len(nrow(pernas)) - 1, Lancamento_ID = base_id,
+        Data = comum$Data,
+        Conta_Debito = pernas$Debito, Conta_Credito = pernas$Credito,
+        Valor = pernas$Valor, Historico = comum$Historico, Doc_Link = comum$Doc_Link,
+        Tipo_Lancamento = comum$Tipo_Lancamento, Ref_ID = comum$Ref_ID,
+        Exercicio = comum$Exercicio, Usuario = comum$Usuario, Timestamp = comum$Timestamp)
+    }
     d <- bind_rows(v_diario(), novo); v_diario(d); persistir("diario", d)
-    showNotification("Lançamento registrado!", type = "message")
+    showNotification(if (nrow(pernas_d) == 1 && nrow(pernas_c) == 1) "Lançamento registrado!"
+                     else paste0("Lançamento composto registrado (",
+                                 nrow(pernas_d), " débito(s), ",
+                                 nrow(pernas_c), " crédito(s))."),
+                     type = "message")
+
+    # Limpa os campos
     updateNumericInput(session, "lan_valor", value = 0)
     updateTextAreaInput(session, "lan_hist", value = "")
     updateTextInput(session, "lan_razao", value = "")
     updateTextInput(session, "lan_docid", value = "")
+    for (i in 1:5) {
+      updateNumericInput(session, paste0("lan_d_valor_", i), value = NA)
+      updateNumericInput(session, paste0("lan_c_valor_", i), value = NA)
+      updateSelectizeInput(session, paste0("lan_d_conta_", i), selected = "")
+      updateSelectizeInput(session, paste0("lan_c_conta_", i), selected = "")
+    }
   })
 
   # --- ESTORNO (única forma de "correção") ---
   observeEvent(input$estornar, {
-    id <- as.numeric(input$estornar)
-    orig <- v_diario() %>% filter(ID == id)
-    if (nrow(orig) == 0) return()
-    if (orig$Tipo_Lancamento[1] == "Estorno") {
+    gid <- as.numeric(input$estornar)
+    grupo <- v_diario() %>% mutate(LID = dplyr::coalesce(Lancamento_ID, ID)) %>%
+      filter(LID == gid)
+    if (nrow(grupo) == 0) return()
+    if (grupo$Tipo_Lancamento[1] == "Estorno") {
       showNotification("Não é possível estornar um estorno.", type = "warning"); return() }
-    if (id %in% v_diario()$Ref_ID) {
+    if (gid %in% (v_diario()$Ref_ID %>% na.omit())) {
       showNotification("Lançamento já estornado.", type = "warning"); return() }
+    n_pernas <- nrow(grupo)
     showModal(modalDialog(title = "Confirmar estorno",
-      p(paste0("Estornar o lançamento #", id, "?")),
+      p(paste0("Estornar o lançamento #", gid,
+               if (n_pernas > 1) paste0(" (composto, ", n_pernas, " partidas)") else "", "?")),
       p(class = "text-muted", "Será criado um lançamento inverso. O original é preservado."),
       footer = tagList(modalButton("Cancelar"),
         actionButton("conf_estorno", "Confirmar estorno", class = "btn-danger"))))
   })
   observeEvent(input$conf_estorno, {
     removeModal()
-    id <- as.numeric(input$estornar)
-    orig <- v_diario() %>% filter(ID == id)
-    novo_id <- max(v_diario()$ID, na.rm = TRUE) + 1
+    gid <- as.numeric(input$estornar)
+    grupo <- v_diario() %>% mutate(LID = dplyr::coalesce(Lancamento_ID, ID)) %>%
+      filter(LID == gid)
+    if (nrow(grupo) == 0) return()
+    base_id <- max(v_diario()$ID, na.rm = TRUE) + 1
     est <- tibble(
-      ID = novo_id, Data = Sys.Date(),
-      Conta_Debito = orig$Conta_Credito, Conta_Credito = orig$Conta_Debito,
-      Valor = orig$Valor,
-      Historico = paste0("ESTORNO do lanç. #", id, " — ", orig$Historico),
-      Doc_Link = orig$Doc_Link, Tipo_Lancamento = "Estorno", Ref_ID = id,
+      ID = base_id + seq_len(nrow(grupo)) - 1,
+      Lancamento_ID = base_id,
+      Data = Sys.Date(),
+      Conta_Debito = grupo$Conta_Credito,   # inverte os lados
+      Conta_Credito = grupo$Conta_Debito,
+      Valor = grupo$Valor,
+      Historico = paste0("ESTORNO do lanç. #", gid, " — ", grupo$Historico),
+      Doc_Link = grupo$Doc_Link, Tipo_Lancamento = "Estorno", Ref_ID = gid,
       Exercicio = exercicio_de(Sys.Date()),
       Usuario = user_email() %||% "n/d", Timestamp = as.character(Sys.time())
     )
     d <- bind_rows(v_diario(), est); v_diario(d); persistir("diario", d)
-    showNotification(paste("Lançamento #", id, "estornado."), type = "message")
+    showNotification(paste0("Lançamento #", gid, " estornado."), type = "message")
   })
 
   # ==========================================================================
-  #  TABELA DO DIÁRIO (com botão de estorno)
+  #  TABELA DO DIÁRIO (uma linha por lançamento; compostos são agrupados)
   # ==========================================================================
   output$tab_diario <- renderDT({
     d <- v_diario()
     if (nrow(d) == 0)
       return(datatable(tibble(Mensagem = "Nenhum lançamento"), options = list(dom = "t"), rownames = FALSE))
-    estornados <- d$Ref_ID %>% na.omit()
-    df <- d %>% arrange(desc(ID)) %>% mutate(
-      Acao = ifelse(Tipo_Lancamento == "Estorno" | ID %in% estornados, "—",
-        sprintf("<button class='btn btn-sm btn-outline-danger' onclick='Shiny.setInputValue(\"estornar\", %d, {priority:\"event\"})'>Estornar</button>", ID)),
-      Valor = formatar_moeda(Valor), Data = format(Data, "%d/%m/%Y")
-    ) %>% select(ID, Data, Débito = Conta_Debito, Crédito = Conta_Credito,
-                 Valor, Histórico = Historico, Tipo = Tipo_Lancamento,
-                 Documento = Doc_Link, Ação = Acao)
-    datatable(df, escape = FALSE, rownames = FALSE,
+    estornados <- d$Ref_ID %>% na.omit() %>% unique()
+    nao_vazio <- function(x) x[!is.na(x) & x != ""]
+    g <- d %>%
+      mutate(LID = dplyr::coalesce(Lancamento_ID, ID),
+             deb_amt = ifelse(!is.na(Conta_Debito) & Conta_Debito != "", Valor, 0)) %>%
+      group_by(LID) %>%
+      summarise(
+        Data = dplyr::first(Data),
+        Débito  = paste(unique(nao_vazio(Conta_Debito)),  collapse = "; "),
+        Crédito = paste(unique(nao_vazio(Conta_Credito)), collapse = "; "),
+        ValorN  = sum(deb_amt, na.rm = TRUE),
+        Histórico = dplyr::first(Historico),
+        Tipo = dplyr::first(Tipo_Lancamento),
+        Documento = dplyr::first(Doc_Link),
+        .groups = "drop") %>%
+      arrange(desc(LID)) %>%
+      mutate(
+        Ação = ifelse(Tipo == "Estorno" | LID %in% estornados, "—",
+          sprintf("<button class='btn btn-sm btn-outline-danger' onclick='Shiny.setInputValue(\"estornar\", %d, {priority:\"event\"})'>Estornar</button>", LID)),
+        Valor = formatar_moeda(ValorN), Data = format(Data, "%d/%m/%Y")) %>%
+      select(`Nº` = LID, Data, Débito, Crédito, Valor,
+             Histórico, Tipo, Documento, Ação)
+    datatable(g, escape = FALSE, rownames = FALSE,
               options = list(pageLength = 12, scrollX = TRUE))
   })
 
@@ -1785,10 +1940,14 @@ server <- function(input, output, session) {
                                        options = list(dom = "t"), rownames = FALSE))
     c <- input$razao_conta
     deb <- d %>% filter(Conta_Debito == c) %>%
-      transmute(ID, Data, Tipo = "Débito", Contrapartida = Conta_Credito,
+      transmute(ID, Data, Tipo = "Débito",
+                Contrapartida = ifelse(is.na(Conta_Credito) | Conta_Credito == "",
+                                       "(composto)", Conta_Credito),
                 Valor, Historico)
     cre <- d %>% filter(Conta_Credito == c) %>%
-      transmute(ID, Data, Tipo = "Crédito", Contrapartida = Conta_Debito,
+      transmute(ID, Data, Tipo = "Crédito",
+                Contrapartida = ifelse(is.na(Conta_Debito) | Conta_Debito == "",
+                                       "(composto)", Conta_Debito),
                 Valor, Historico)
     r <- bind_rows(deb, cre) %>% arrange(Data, ID) %>%
       mutate(Sinal = if_else(

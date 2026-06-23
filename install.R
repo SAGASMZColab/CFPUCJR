@@ -17,3 +17,4 @@ instalar <- pkgs[!pkgs %in% rownames(installed.packages())]
 if (length(instalar) > 0) install.packages(instalar)
 
 cat("Dependências instaladas com sucesso.\n")
+
