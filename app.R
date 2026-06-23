@@ -633,14 +633,23 @@ backend_conectar <- function() {
       tf  <- file.path(tempdir(), "pucjr-oauth-token.rds")
       writeBin(raw, tf)
       tok <- readRDS(tf)
-      # O token foi gerado localmente com cache em ".secrets", caminho que NÃO
-      # existe no servidor. Desligamos o cache em disco para o gargle renovar o
-      # token apenas em memória (senão falha ao tentar ler/gravar ".secrets/...").
-      options(gargle_oauth_cache = FALSE)
-      try(tok$cache_path <- FALSE, silent = TRUE)
+      # O token foi gerado localmente com cache em ".secrets" — caminho que NÃO existe
+      # no servidor. Ao renovar o token, o gargle tenta ler/gravar esse cache e falha.
+      # Solução: redirecionar o cache para um diretório TEMPORÁRIO gravável e gravar o
+      # token lá, para qualquer leitura/escrita do gargle funcionar.
+      cache_dir <- file.path(tempdir(), "gargle_cache")
+      dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
+      fname <- tryCatch({
+        bp <- basename(tok$cache_path)
+        if (is.character(bp) && length(bp) == 1 && nzchar(bp)) bp else "pucjr_token"
+      }, error = function(e) "pucjr_token")
+      novo_cache <- file.path(cache_dir, fname)
+      try(tok$cache_path <- novo_cache, silent = TRUE)
+      try(saveRDS(tok, novo_cache), silent = TRUE)
+      options(gargle_oauth_cache = cache_dir)
       drive_auth(token = tok)
       gs4_auth(token = drive_token())
-      message("Autenticado via token OAuth (conta com cota no Drive). Partes: ",
+      message("Autenticado via token OAuth [cache-tmp v2] (conta com cota no Drive). Partes: ",
               if (nzchar(CFG$GOOGLE_TOKEN_B64)) "1 (variável única)" else (i - 1L))
     } else {
       # Se o conteúdo da chave veio por variável de ambiente, grava num arquivo
